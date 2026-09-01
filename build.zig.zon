@@ -1,0 +1,17 @@
+.{
+    .name = .bragart,
+    .version = "0.0.0",
+    .fingerprint = 0xc678b079bc782eb9,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .yaml = .{
+            .url = "https://github.com/Stuff7/zig-yaml/archive/refs/heads/zig-0.16.tar.gz",
+            .hash = "zig_yaml-0.3.0-C1161gmsAgBMXfMGSbvs1jaocmD2KVCEZRPKBSO0x1Hc",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

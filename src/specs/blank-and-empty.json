@@ -1,0 +1,210 @@
+[
+  {
+    "name": "empty_string_is_empty",
+    "template": "{% if x == empty %}empty{% else %}not{% endif %}",
+    "environment": { "x": "" },
+    "expected": "empty",
+    "complexity": 100,
+    "hint": "Recognize 'empty' as a keyword representing the empty state.\nAn empty string \"\" should equal the 'empty' keyword. Create\nan EmptyLiteral node during parsing. During evaluation, compare\nthe variable's value against emptiness: empty strings, empty\narrays, and empty hashes all equal 'empty'.\n"
+  },
+  {
+    "name": "empty_array_is_empty",
+    "template": "{% if items == empty %}empty{% else %}not{% endif %}",
+    "environment": { "items": [] },
+    "expected": "empty",
+    "complexity": 105,
+    "hint": "Arrays with no elements should equal 'empty'. When evaluating\nthe comparison, check if the array's length is zero. An empty\narray [] is considered empty. This is distinct from an array\ncontaining empty strings, which would not be empty.\n"
+  },
+  {
+    "name": "empty_hash_is_empty",
+    "template": "{% if obj == empty %}empty{% else %}not{% endif %}",
+    "environment": { "obj": {} },
+    "expected": "empty",
+    "complexity": 105,
+    "hint": "Objects/hashes with no properties should equal 'empty'. Check\nif the object has zero keys. An empty hash {} is considered\nempty. This tests that your empty check works across different\ncollection types (arrays and objects).\n"
+  },
+  {
+    "name": "nil_is_not_empty",
+    "template": "{% if missing == empty %}empty{% else %}not{% endif %}",
+    "environment": {},
+    "expected": "not",
+    "complexity": 110,
+    "hint": "In liquid-ruby, nil does NOT equal empty. Undefined variables\nevaluate to nil, but nil is a distinct concept from empty.\nThe 'empty' keyword refers to empty strings \"\", not nil values.\nUse nil check for undefined, empty check for empty strings.\n"
+  },
+  {
+    "name": "nil_is_also_nil",
+    "template": "{% if missing == nil %}nil{% else %}not{% endif %}",
+    "environment": {},
+    "expected": "nil",
+    "complexity": 110,
+    "hint": "Distinguish nil from empty conceptually, even though nil is\nempty. A missing variable should equal the 'nil' keyword.\nCreate a NilLiteral node. Nil has a dual nature: it equals\nboth nil and empty, but they're different keywords for checks.\n"
+  },
+  {
+    "name": "non_empty_string_not_empty",
+    "template": "{% if text == empty %}empty{% else %}not{% endif %}",
+    "environment": { "text": "hello" },
+    "expected": "not",
+    "complexity": 100,
+    "hint": "Strings with content are not empty. Check the string's length\nduring the empty comparison. Any string with one or more\ncharacters should not equal 'empty'. This is the base case\nfor non-empty values.\n"
+  },
+  {
+    "name": "whitespace_string_not_empty",
+    "template": "{% if text == empty %}empty{% else %}not{% endif %}",
+    "environment": { "text": "   " },
+    "expected": "not",
+    "complexity": 115,
+    "hint": "Whitespace-only strings are NOT empty. The 'empty' keyword\nchecks for zero length, not meaningful content. A string\nwith spaces, tabs, or newlines has length > 0, so it's not\nempty. This distinguishes 'empty' from 'blank'.\n"
+  },
+  {
+    "name": "whitespace_string_is_blank",
+    "template": "{% if text == blank %}blank{% else %}not{% endif %}",
+    "environment": { "text": "   " },
+    "expected": "blank",
+    "complexity": 120,
+    "hint": "Whitespace-only strings are considered blank. The 'blank' keyword matches\nvalues that are empty or contain only whitespace. This includes \"\", \" \",\n\"\\n\", \"\\t\", and any combination of whitespace characters.\n"
+  },
+  {
+    "name": "empty_string_is_blank",
+    "template": "{% if x == blank %}blank{% else %}not{% endif %}",
+    "environment": { "x": "" },
+    "expected": "blank",
+    "complexity": 120,
+    "hint": "Empty strings are considered blank. The 'blank' keyword matches empty\nstrings, nil, empty arrays, empty hashes, and whitespace-only strings.\n"
+  },
+  {
+    "name": "nil_is_blank",
+    "template": "{% if missing == blank %}blank{% else %}not{% endif %}",
+    "environment": {},
+    "expected": "blank",
+    "complexity": 120,
+    "hint": "Undefined/nil variables are considered blank. The 'blank' keyword matches\nnil values, which is useful for checking if a variable exists and has\na meaningful value.\n"
+  },
+  {
+    "name": "false_is_not_empty",
+    "template": "{% if flag == empty %}empty{% else %}not{% endif %}",
+    "environment": { "flag": false },
+    "expected": "not",
+    "complexity": 125,
+    "hint": "The boolean false is NOT empty. This is a critical distinction:\nfalse is a value (boolean false), while empty represents absence\nor zero-length collections. When checking == empty, false should\nnot match. Only nil, \"\", [], and {} are empty.\n"
+  },
+  {
+    "name": "false_is_blank",
+    "template": "{% if flag == blank %}blank{% else %}not{% endif %}",
+    "environment": { "flag": false },
+    "expected": "blank",
+    "complexity": 130,
+    "hint": "The boolean false is considered blank. In Liquid, 'blank' matches values\nthat are considered \"empty\" or \"nothing\" - this includes nil, false,\nempty strings, empty arrays, and empty hashes.\n"
+  },
+  {
+    "name": "zero_is_not_empty",
+    "template": "{% if num == empty %}empty{% else %}not{% endif %}",
+    "environment": { "num": 0 },
+    "expected": "not",
+    "complexity": 125,
+    "hint": "The number zero is NOT empty. Zero is a valid numeric value,\nnot an empty collection or nil. When checking for empty, only\ncollection types (strings, arrays, objects) and nil should\nmatch. Numbers, including zero, have values.\n"
+  },
+  {
+    "name": "zero_is_not_blank",
+    "template": "{% if num == blank %}blank{% else %}not{% endif %}",
+    "environment": { "num": 0 },
+    "expected": "not",
+    "complexity": 130,
+    "hint": "The number zero is NOT blank. Unlike false, zero is not\nconsidered blank in Liquid. Only nil, false, empty strings,\nwhitespace-only strings, and empty collections are blank.\nThis shows false is special-cased in blank checks.\n"
+  },
+  {
+    "name": "array_with_empty_string_not_empty",
+    "template": "{% if items == empty %}empty{% else %}not{% endif %}",
+    "environment": { "items": [""] },
+    "expected": "not",
+    "complexity": 135,
+    "hint": "An array containing an empty string is NOT empty. The array\nhas one element (length = 1), so the array itself is not empty.\nEmpty checks look at the collection's size, not the emptiness\nof its contents. The array [\"\"] has length 1, therefore not empty.\n"
+  },
+  {
+    "name": "nested_empty_check",
+    "template": "{% if user.name == empty %}empty{% else %}not{% endif %}",
+    "environment": { "user": { "name": "" } },
+    "expected": "empty",
+    "complexity": 140,
+    "hint": "Check emptiness of nested properties. First navigate to user.name,\nwhich evaluates to \"\". Then compare that string against empty.\nThe property access happens first, then the empty check. This\ntests that empty works with any expression, not just top-level vars.\n"
+  },
+  {
+    "name": "nil_property_is_not_empty_in_liquid_ruby",
+    "template": "{% if user.missing == empty %}empty{% else %}not{% endif %}",
+    "environment": { "user": {} },
+    "expected": "not",
+    "complexity": 140,
+    "hint": "In liquid-ruby, nil does not equal empty. Accessing a missing\nproperty returns nil, and nil == empty evaluates to false.\nOther implementations may treat nil as empty.\n"
+  },
+  {
+    "name": "default_with_empty_check",
+    "template": "{{ text | default: 'N/A' }}",
+    "environment": { "text": "" },
+    "expected": "N/A",
+    "complexity": 145,
+    "hint": "The 'default' filter provides fallback values for empty inputs.\nWhen the input is empty (including empty strings), use the\ndefault value instead. Implement the default filter to check\nif input == empty, and if so, return the filter argument.\nEmpty strings should trigger the default.\n"
+  },
+  {
+    "name": "default_with_whitespace",
+    "template": "{{ text | default: 'N/A' }}",
+    "environment": { "text": "   " },
+    "expected": "   ",
+    "complexity": 150,
+    "hint": "The 'default' filter uses empty semantics, not blank. A\nwhitespace-only string is not empty (length > 0), so it\ndoesn't trigger the default. The original value \"   \" is\nreturned. This shows the difference between empty and blank\nin practical filter usage.\n"
+  },
+  {
+    "name": "unless_empty_guard",
+    "template": "{% unless items == empty %}{{ items.size }}{% endunless %}",
+    "environment": { "items": [1, 2, 3] },
+    "expected": "3",
+    "complexity": 150,
+    "hint": "Use 'unless' with empty checks as a guard clause. The unless\ntag is the opposite of if: it executes when the condition is\nfalse. Here, unless items == empty means \"if items is not empty\".\nParse unless as a negated if, then check emptiness.\n"
+  },
+  {
+    "name": "unless_empty_guard_blocks_output",
+    "template": "{% unless items == empty %}{{ items.size }}{% endunless %}",
+    "environment": { "items": [] },
+    "expected": "",
+    "complexity": 150,
+    "hint": "When the unless condition is true (items IS empty), the block\ndoesn't execute. An empty array triggers the guard, so the\nbody (items.size) is skipped. Output is empty string. This\ntests the guard pattern for preventing errors on empty collections.\n"
+  },
+  {
+    "name": "checking_for_content_pattern",
+    "template": "{% if text != empty %}{{ text }}{% else %}No content{% endif %}",
+    "environment": { "text": "" },
+    "expected": "No content",
+    "complexity": 155,
+    "hint": "Use != empty to check for presence of content. The != operator\nwith empty checks if something is NOT empty. Parse != as a\nNotEquals comparison. Empty string != empty is false, so the\nelse branch executes. This is the idiomatic way to check for content.\n"
+  },
+  {
+    "name": "complex_empty_guard",
+    "template": "{% if user != empty and user.name != empty %}{{ user.name }}{% else %}Anonymous{% endif %}",
+    "environment": { "user": { "name": "" } },
+    "expected": "Anonymous",
+    "complexity": 165,
+    "hint": "Combine multiple empty checks with logical AND. First check if\nuser exists (not empty/nil), then check if user.name has content.\nHere, user exists (object is not empty), but user.name is an\nempty string. The AND requires both conditions true, so this\nevaluates false, outputting \"Anonymous\". Guard against nested empties.\n"
+  },
+  {
+    "name": "empty_vs_blank_comparison",
+    "template": "{% if text == empty %}E{% elsif text == blank %}B{% else %}N{% endif %}",
+    "environment": { "text": "  \n  " },
+    "expected": "B",
+    "complexity": 170,
+    "hint": "== empty checks if the value is empty (zero length), == blank checks if\nthe value is blank (empty or whitespace-only). A whitespace string has\nlength > 0, so it's not empty, but it IS blank. Output is \"B\" because\nthe second condition matches.\n"
+  },
+  {
+    "name": "array_size_vs_empty",
+    "template": "{% if items.size == 0 %}size zero{% elsif items == empty %}empty{% else %}has items{% endif %}",
+    "environment": { "items": [] },
+    "expected": "size zero",
+    "complexity": 175,
+    "hint": "Show that empty arrays have size 0. The .size property returns\nthe array length. When size == 0, that's checked first. An empty\narray satisfies both conditions (size 0 and == empty), but the\nfirst condition wins due to if/elsif ordering. Both checks are\nvalid ways to detect empty arrays.\n"
+  },
+  {
+    "name": "presence_chain_with_empty",
+    "template": "{{ user.profile.bio | default: user.name | default: 'Guest' }}",
+    "environment": { "user": { "profile": {}, "name": "" } },
+    "expected": "Guest",
+    "complexity": 180,
+    "hint": "Chain multiple default filters to create a presence chain.\nFirst try user.profile.bio (missing property = nil = empty),\nso use the default which is user.name. That's \"\" (empty string),\nso use the next default \"Guest\". This implements a fallback\ncascade: try bio, then name, then fallback to Guest. Each\ndefault checks for emptiness.\n"
+  }
+]
