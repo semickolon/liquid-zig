@@ -4,33 +4,28 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const yaml_mod = b.dependency("yaml", .{
+    const lib_mod = b.addModule("liquid", .{
+        .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const exe = b.addExecutable(.{
-        .name = "bragart",
+    const exe_tests = b.addExecutable(.{
+        .name = "liquid_specs",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
+            .root_source_file = b.path("specs/test.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "yaml", .module = yaml_mod.module("yaml") },
-            },
+            .imports = &.{.{ .name = "liquid", .module = lib_mod }},
         }),
     });
 
-    b.installArtifact(exe);
+    const install_exe_tests = b.addInstallArtifact(exe_tests, .{});
 
-    const run_step = b.step("run", "Run the app");
+    const run_exe_tests = b.addRunArtifact(exe_tests);
+    run_exe_tests.addFileArg(b.path(b.pathJoin(&.{ "specs", b.args.?[0] })));
 
-    const run_cmd = b.addRunArtifact(exe);
-    run_step.dependOn(&run_cmd.step);
-
-    run_cmd.step.dependOn(b.getInstallStep());
-
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&install_exe_tests.step);
 }
