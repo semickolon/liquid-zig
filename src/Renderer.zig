@@ -95,15 +95,21 @@ fn renderTag(self: *const Renderer, context: Context, writer: *Io.Writer, tag: A
 
                     if (f.opt_offset) |expr| {
                         switch (try self.evalExpr(context, expr)) {
-                            .int => |offset| slice = slice[@intCast(offset)..],
+                            .number => |n| switch (n) {
+                                .int => |offset| slice = slice[@intCast(offset)..],
+                                else => {},
+                            },
                             else => {},
                         }
                     }
 
                     if (f.opt_limit) |expr| {
                         switch (try self.evalExpr(context, expr)) {
-                            .int => |limit| if (limit > 0) {
-                                slice = slice[0..@intCast(limit)];
+                            .number => |n| switch (n) {
+                                .int => |limit| if (limit > 0) {
+                                    slice = slice[0..@intCast(limit)];
+                                },
+                                else => {},
                             },
                             else => {},
                         }
@@ -187,15 +193,15 @@ fn evalExpr(self: *const Renderer, context: Context, ref: Ast.ExprRef) error{Not
             break :blk .{ .bool = result };
         },
         .range => |r| blk: { // TODO ??
-            const start = (try self.evalExpr(context, r.start)).int;
-            const end = (try self.evalExpr(context, r.end)).int;
+            const start = (try self.evalExpr(context, r.start)).number.int;
+            const end = (try self.evalExpr(context, r.end)).number.int;
             assert(start <= end);
 
             const array = self.scratch.alloc(liquid.Value, @intCast(end - start + 1)) catch unreachable;
             var cur = start;
 
             for (array) |*e| {
-                e.* = .{ .int = cur };
+                e.* = .{ .number = .from(cur) };
                 cur += 1;
             }
 
@@ -317,7 +323,7 @@ const Filters = struct {
 
     pub fn size(_: Allocator, in: liquid.Value) R {
         return switch (in) {
-            inline .string, .array => |src| .{ .int = @intCast(src.len) },
+            inline .string, .array => |src| .{ .number = .from(src.len) },
             else => in,
         };
     }

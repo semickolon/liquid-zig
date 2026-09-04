@@ -271,8 +271,7 @@ fn valueExpr(self: *Parser) !Ast.ExprRef {
     const tok = self.advance() orelse unreachable;
 
     const root_expr: Ast.Expr = switch (tok) {
-        .int => |n| .{ .literal = .{ .int = n } },
-        .float => |n| .{ .literal = .{ .float = n } },
+        inline .int, .float => |n| .{ .literal = .{ .number = .from(n) } },
         .string => |s| .{ .literal = .{ .string = s } },
         .keyword => |kw| switch (kw) {
             .nil => .{ .literal = .nil },

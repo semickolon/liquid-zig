@@ -1,6 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
+const activeTag = std.meta.activeTag;
 
 const lib = @import("lib.zig");
 const Tokenizer = @import("Tokenizer.zig");
@@ -34,8 +35,7 @@ pub const Value = union(enum) {
     empty,
     blank,
     bool: bool,
-    int: i32,
-    float: f32,
+    number: Number,
     string: []const u8,
     array: []const Value,
     hash: std.StringHashMapUnmanaged(Value),
@@ -63,8 +63,7 @@ pub const Value = union(enum) {
         return switch (json_value) {
             .null => .nil,
             .bool => |b| .{ .bool = b },
-            .integer => |n| .{ .int = @intCast(n) }, // TODO
-            .float => |n| .{ .float = @floatCast(n) }, // TODO
+            inline .integer, .float => |n| .{ .number = .from(n) },
             .number_string => @panic("Not implemented"),
             .string => |s| .{ .string = s },
             .array => |a| blk: {
@@ -113,9 +112,7 @@ pub const Value = union(enum) {
 
     pub fn isBlank(self: *const Value) bool {
         return switch (self.*) {
-            .nil => true,
-            .empty => @panic("Not implemented"),
-            .blank => true,
+            .nil, .empty, .blank => true,
             .bool => |b| !b,
             .string => |s| isWhitespaceOnly(s),
             .array => |a| a.len == 0,
@@ -153,8 +150,7 @@ pub const Value = union(enum) {
         return switch (self) {
             .nil, .empty, .blank => true,
             .bool => |b| b == other.bool,
-            .int => |n| n == other.int,
-            .float => |n| n == other.float,
+            .number => |n| n.eql(other.number),
             .string => |s| std.mem.eql(u8, s, other.string),
             .array => @panic("Not implemented"),
             .hash => @panic("Not implemnented"),
@@ -163,15 +159,9 @@ pub const Value = union(enum) {
 
     pub fn lessThan(self: Value, other: Value) bool {
         return switch (self) {
-            .int => |a| switch (other) {
-                .int => |b| a < b,
-                .float => |b| @as(f32, @floatFromInt(a)) < b,
-                else => false,
-            },
-            .float => |a| switch (other) {
-                .int => |b| a < @as(f32, @floatFromInt(b)),
-                .float => |b| a < b,
-                else => false,
+            .number => |a| switch (other) {
+                .number => |b| a.lessThan(b),
+                else => @panic("Not implemented"),
             },
             else => @panic("Not implemented"),
         };
@@ -179,15 +169,9 @@ pub const Value = union(enum) {
 
     pub fn greaterThan(self: Value, other: Value) bool {
         return switch (self) {
-            .int => |a| switch (other) {
-                .int => |b| a > b,
-                .float => |b| @as(f32, @floatFromInt(a)) > b,
-                else => false,
-            },
-            .float => |a| switch (other) {
-                .int => |b| a > @as(f32, @floatFromInt(b)),
-                .float => |b| a > b,
-                else => false,
+            .number => |a| switch (other) {
+                .number => |b| a.greaterThan(b),
+                else => @panic("Not implemented"),
             },
             else => @panic("Not implemented"),
         };
@@ -218,7 +202,7 @@ pub const Value = union(enum) {
             .nil => return .nil,
             .array => |a| {
                 if (std.mem.eql(u8, property, "size")) {
-                    return .{ .int = @intCast(a.len) };
+                    return .{ .number = .from(a.len) };
                 }
                 @panic("Not implemented");
             },
@@ -233,12 +217,82 @@ pub const Value = union(enum) {
         switch (self.*) {
             .nil, .empty, .blank => {},
             .bool => |b| try writer.writeAll(if (b) "true" else "false"),
-            .int => |n| try writer.printInt(n, 10, .lower, .{}),
-            .float => |n| try writer.printFloat(n, .{}),
+            .number => |num| switch (num) {
+                .int => |n| try writer.printInt(n, 10, .lower, .{}),
+                .float => |n| try writer.printFloat(n, .{}),
+            },
             .string => |s| try writer.writeAll(s),
             .array => |a| for (a) |item| try item.render(writer),
             .hash => @panic("Not implemented"),
         }
+    }
+};
+
+pub const Number = union(enum) {
+    int: i32,
+    float: f32,
+
+    const CompareOp = enum { eql, lt, gt, lt_eql, gt_eql };
+
+    pub fn from(value: anytype) Number {
+        return switch (@typeInfo(@TypeOf(value))) {
+            .int => .{ .int = @intCast(value) },
+            .float => .{ .float = @floatCast(value) },
+            else => @panic("Invalid type for Number"),
+        };
+    }
+
+    fn compare(self: Number, other: Number, op: CompareOp) bool {
+        if (activeTag(self) == .float or activeTag(other) == .float) {
+            const a = self.asFloat();
+            const b = other.asFloat();
+
+            return switch (op) {
+                .eql => a == b,
+                .lt => a < b,
+                .gt => a > b,
+                .lt_eql => a <= b,
+                .gt_eql => a >= b,
+            };
+        } else { // both ints
+            const a = self.int;
+            const b = other.int;
+
+            return switch (op) {
+                .eql => a == b,
+                .lt => a < b,
+                .gt => a > b,
+                .lt_eql => a <= b,
+                .gt_eql => a >= b,
+            };
+        }
+    }
+
+    pub fn asFloat(self: Number) f32 {
+        return switch (self) {
+            .int => |n| @floatFromInt(n),
+            .float => |n| n,
+        };
+    }
+
+    pub fn eql(self: Number, other: Number) bool {
+        return self.compare(other, .eql);
+    }
+
+    pub fn lessThan(self: Number, other: Number) bool {
+        return self.compare(other, .lt);
+    }
+
+    pub fn greaterThan(self: Number, other: Number) bool {
+        return self.compare(other, .gt);
+    }
+
+    pub fn lessThanOrEql(self: Number, other: Number) bool {
+        return self.compare(other, .lt_eql);
+    }
+
+    pub fn greaterThanOrEql(self: Number, other: Number) bool {
+        return self.compare(other, .gt_eql);
     }
 };
 
