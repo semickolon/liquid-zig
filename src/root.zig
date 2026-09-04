@@ -161,6 +161,58 @@ pub const Value = union(enum) {
         };
     }
 
+    pub fn lessThan(self: Value, other: Value) bool {
+        return switch (self) {
+            .int => |a| switch (other) {
+                .int => |b| a < b,
+                .float => |b| @as(f32, @floatFromInt(a)) < b,
+                else => false,
+            },
+            .float => |a| switch (other) {
+                .int => |b| a < @as(f32, @floatFromInt(b)),
+                .float => |b| a < b,
+                else => false,
+            },
+            else => @panic("Not implemented"),
+        };
+    }
+
+    pub fn greaterThan(self: Value, other: Value) bool {
+        return switch (self) {
+            .int => |a| switch (other) {
+                .int => |b| a > b,
+                .float => |b| @as(f32, @floatFromInt(a)) > b,
+                else => false,
+            },
+            .float => |a| switch (other) {
+                .int => |b| a > @as(f32, @floatFromInt(b)),
+                .float => |b| a > b,
+                else => false,
+            },
+            else => @panic("Not implemented"),
+        };
+    }
+
+    pub fn contains(self: Value, other: Value) bool {
+        const what = switch (other) {
+            .string => |str| str,
+            else => return false,
+        };
+
+        switch (self) {
+            .string => |str| return std.mem.find(u8, str, what) != null,
+            .array => |array| for (array) |item| {
+                switch (item) {
+                    .string => |str| if (std.mem.eql(u8, str, what)) return true,
+                    else => {},
+                }
+            },
+            else => {},
+        }
+
+        return false;
+    }
+
     pub fn get(self: *const Value, property: []const u8) Value {
         switch (self.*) {
             .nil => return .nil,

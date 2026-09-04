@@ -14,6 +14,8 @@ scratch: Allocator,
 
 pub const Error = Allocator.Error || Io.Writer.Error || error{NotImplemented};
 
+const ControlFlow = enum { none, brk, cont };
+
 const Context = struct {
     dynamic: *std.StringHashMapUnmanaged(liquid.Value),
     static: liquid.Value,
@@ -42,18 +44,24 @@ pub fn render(allocator: Allocator, writer: *Io.Writer, ast: liquid.Ast, static_
         .scratch = arena.allocator(),
     };
 
-    try r.renderNode(context, writer, ast.root_node);
+    const cf = try r.renderNode(context, writer, ast.root_node);
+    assert(cf == .none);
 }
 
-fn renderNode(self: *const Renderer, context: Context, writer: *Io.Writer, ref: Ast.NodeRef) Error!void {
+fn renderNode(self: *const Renderer, context: Context, writer: *Io.Writer, ref: Ast.NodeRef) Error!ControlFlow {
     switch (self.nodePtr(ref).*) {
         .raw => |raw| try writer.writeAll(raw),
         .object => |obj| try self.renderObject(context, writer, obj),
-        .tag => |tag| try self.renderTag(context, writer, tag),
+        .tag => |tag| return try self.renderTag(context, writer, tag),
         .block => |children| for (children) |child| {
-            try self.renderNode(context, writer, child);
+            const cf = try self.renderNode(context, writer, child);
+            switch (cf) {
+                .none => {},
+                .brk, .cont => return cf,
+            }
         },
     }
+    return .none;
 }
 
 fn renderObject(self: *const Renderer, context: Context, writer: *Io.Writer, filtered_expr: Ast.FilteredExpr) Error!void {
@@ -61,7 +69,7 @@ fn renderObject(self: *const Renderer, context: Context, writer: *Io.Writer, fil
     try value.render(writer);
 }
 
-fn renderTag(self: *const Renderer, context: Context, writer: *Io.Writer, tag: Ast.Tag) Error!void {
+fn renderTag(self: *const Renderer, context: Context, writer: *Io.Writer, tag: Ast.Tag) Error!ControlFlow {
     switch (tag) {
         .conditional => |c| {
             for (c.branches) |b| {
@@ -79,7 +87,60 @@ fn renderTag(self: *const Renderer, context: Context, writer: *Io.Writer, tag: A
             const value = try self.evalFilteredExpr(context, a.filtered_expr);
             try context.assign(self.scratch, a.ident, value);
         },
+        .@"for" => |f| {
+            const collection = try self.evalExpr(context, f.collection);
+            switch (collection) {
+                .array => |array| {
+                    var slice = array;
+
+                    if (f.opt_offset) |expr| {
+                        switch (try self.evalExpr(context, expr)) {
+                            .int => |offset| slice = slice[@intCast(offset)..],
+                            else => {},
+                        }
+                    }
+
+                    if (f.opt_limit) |expr| {
+                        switch (try self.evalExpr(context, expr)) {
+                            .int => |limit| if (limit > 0) {
+                                slice = slice[0..@intCast(limit)];
+                            },
+                            else => {},
+                        }
+                    }
+
+                    if (slice.len == 0) {
+                        if (f.fallback) |fb|
+                            return try self.renderNode(context, writer, fb);
+                    } else {
+                        for (0..slice.len) |loop_idx| {
+                            const item_idx = if (f.opt_reversed)
+                                slice.len - loop_idx - 1
+                            else
+                                loop_idx;
+                            const item = slice[item_idx];
+
+                            try context.assign(self.scratch, f.iter_ident, item); // TODO lmao this is not how it's supposed to be
+
+                            const cf = try self.renderNode(context, writer, f.body);
+                            switch (cf) {
+                                .none => {},
+                                .brk => break,
+                                .cont => continue,
+                            }
+                        }
+
+                        try context.assign(self.scratch, f.iter_ident, .nil); // TODO lmao this is not how it's supposed to be
+                    }
+                },
+                else => return error.NotImplemented,
+            }
+        },
+        .@"break" => return .brk,
+        .@"continue" => return .cont,
     }
+
+    return .none;
 }
 
 fn evalFilteredExpr(self: *const Renderer, context: Context, filtered_expr: Ast.FilteredExpr) !liquid.Value {
@@ -97,16 +158,17 @@ fn evalExpr(self: *const Renderer, context: Context, ref: Ast.ExprRef) error{Not
         .literal => |lit| lit,
         .variable => |v| context.resolve(v),
         .property => |f| (try self.evalExpr(context, f.parent)).get(f.name),
-        .logical => |log| blk: {
-            const lhs = (try self.evalExpr(context, log.lhs)).isTruthy();
-            const rhs = (try self.evalExpr(context, log.rhs)).isTruthy();
+        .logical => |log| .{
+            .bool = blk: {
+                const lhs = (try self.evalExpr(context, log.lhs)).isTruthy();
+                switch (log.op) {
+                    .@"and" => if (!lhs) break :blk false,
+                    .@"or" => if (lhs) break :blk true,
+                }
 
-            break :blk .{
-                .bool = switch (log.op) {
-                    .@"and" => lhs and rhs,
-                    .@"or" => lhs or rhs, // TODO: optimize
-                },
-            };
+                const rhs = (try self.evalExpr(context, log.rhs)).isTruthy();
+                break :blk rhs;
+            },
         },
         .comparison => |comp| blk: {
             const lhs = try self.evalExpr(context, comp.lhs);
@@ -114,11 +176,30 @@ fn evalExpr(self: *const Renderer, context: Context, ref: Ast.ExprRef) error{Not
 
             const result: bool = switch (comp.op) {
                 .equal_equal => lhs.eql(rhs),
-                .bang_equal => !lhs.eql(rhs),
-                else => return error.NotImplemented,
+                .bang_equal, .lt_gt => !lhs.eql(rhs),
+                .lt => lhs.lessThan(rhs),
+                .gt => lhs.greaterThan(rhs),
+                .lt_equal => lhs.lessThan(rhs) or lhs.eql(rhs),
+                .gt_equal => lhs.greaterThan(rhs) or lhs.eql(rhs),
+                .contains => lhs.contains(rhs),
             };
 
             break :blk .{ .bool = result };
+        },
+        .range => |r| blk: { // TODO ??
+            const start = (try self.evalExpr(context, r.start)).int;
+            const end = (try self.evalExpr(context, r.end)).int;
+            assert(start <= end);
+
+            const array = self.scratch.alloc(liquid.Value, @intCast(end - start + 1)) catch unreachable;
+            var cur = start;
+
+            for (array) |*e| {
+                e.* = .{ .int = cur };
+                cur += 1;
+            }
+
+            break :blk .{ .array = array };
         },
     };
 }
@@ -134,8 +215,7 @@ fn exprPtr(self: *const Renderer, ref: Ast.ExprRef) *const Ast.Expr {
 fn applyFilter(self: *const Renderer, context: Context, filter: Ast.Filter, in: liquid.Value) !liquid.Value {
     inline for (comptime std.meta.declarations(Filters)) |decl| {
         const func = @field(Filters, decl.name);
-        const Fn = @TypeOf(func);
-        const fn_info = @typeInfo(Fn).@"fn";
+        const fn_info = @typeInfo(@TypeOf(func)).@"fn";
         const params = fn_info.params;
 
         comptime assert(params[0].type.? == Allocator);
@@ -153,7 +233,7 @@ fn applyFilter(self: *const Renderer, context: Context, filter: Ast.Filter, in: 
             positional_args = args_info.array.len;
         };
 
-        if (std.mem.eql(u8, filter.name, decl.name)) {
+        if (std.mem.eql(u8, filter.name, decl.name)) { // TODO: try StaticStringMap?
             if (positional_args > 0) {
                 const args = try self.makePositionalArgs(positional_args, context, filter);
                 return try @call(.auto, func, .{ self.scratch, in, args });

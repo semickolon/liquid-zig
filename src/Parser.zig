@@ -131,56 +131,23 @@ fn parseFilterArg(self: *Parser) !Ast.Filter.Arg {
 
 fn parseTag(self: *Parser) !?Ast.Tag {
     if (self.matchTagStart("if")) {
-        return try self.parseConditional(false);
+        return try self.parseConditionalTag(false);
     } else if (self.matchTagStart("unless")) {
-        return try self.parseConditional(true);
+        return try self.parseConditionalTag(true);
     } else if (self.matchTagStart("assign")) {
-        const ident = self.consume(.identifier).identifier;
-        _ = self.consume(.equal);
-        const filtered_expr = try self.parseFilteredExpr();
+        return try self.parseAssignTag();
+    } else if (self.matchTagStart("for")) {
+        return try self.parseForTag();
+    } else if (self.matchTagStart("break")) {
         _ = self.consume(.end_tag);
-        return .{ .assign = .{
-            .ident = ident,
-            .filtered_expr = filtered_expr,
-        } };
+        return .@"break";
+    } else if (self.matchTagStart("continue")) {
+        _ = self.consume(.end_tag);
+        return .@"continue";
     }
 
     return null; // Returning null here ends the block parser (e.g., on elsif, endif)
     // TODO: panic on unrecognized keywords
-}
-
-fn parseConditional(self: *Parser, unless: bool) !Ast.Tag {
-    var branches = try std.ArrayList(Ast.Tag.Branch).initCapacity(self.scratch, 4);
-    branches.appendAssumeCapacity(try self.branch(unless));
-
-    while (self.matchTagStart("elsif")) {
-        try branches.append(self.scratch, try self.branch(false));
-    }
-
-    const else_block: ?Ast.NodeRef = if (self.matchTagStart("else")) blk: {
-        _ = self.consume(.end_tag);
-        break :blk try self.parseBlock();
-    } else null;
-
-    assert(self.matchTagStart(if (unless) "endunless" else "endif"));
-    _ = self.consume(.end_tag);
-
-    return .{ .conditional = .{
-        .branches = try self.allocator.dupe(Ast.Tag.Branch, branches.items),
-        .fallback = else_block,
-    } };
-}
-
-fn branch(self: *Parser, unless: bool) !Ast.Tag.Branch {
-    const condition = try self.conditionExpr();
-    _ = self.consume(.end_tag);
-    const block = try self.parseBlock();
-
-    return .{
-        .condition = condition,
-        .unless = unless,
-        .block = block,
-    };
 }
 
 fn matchTagStart(self: *Parser, expected: []const u8) bool {
@@ -200,6 +167,105 @@ fn matchTagStart(self: *Parser, expected: []const u8) bool {
     return false;
 }
 
+fn parseConditionalTag(self: *Parser, unless: bool) !Ast.Tag {
+    var branches = try std.ArrayList(Ast.Tag.Branch).initCapacity(self.scratch, 4);
+    branches.appendAssumeCapacity(try self.parseBranch(unless));
+
+    while (self.matchTagStart("elsif")) {
+        try branches.append(self.scratch, try self.parseBranch(false));
+    }
+
+    const else_block: ?Ast.NodeRef = if (self.matchTagStart("else")) blk: {
+        _ = self.consume(.end_tag);
+        break :blk try self.parseBlock();
+    } else null;
+
+    assert(self.matchTagStart(if (unless) "endunless" else "endif"));
+    _ = self.consume(.end_tag);
+
+    return .{ .conditional = .{
+        .branches = try self.allocator.dupe(Ast.Tag.Branch, branches.items),
+        .fallback = else_block,
+    } };
+}
+
+fn parseBranch(self: *Parser, unless: bool) !Ast.Tag.Branch {
+    const condition = try self.conditionExpr();
+    _ = self.consume(.end_tag);
+    const block = try self.parseBlock();
+
+    return .{
+        .condition = condition,
+        .unless = unless,
+        .block = block,
+    };
+}
+
+fn parseAssignTag(self: *Parser) !Ast.Tag {
+    const ident = self.consume(.identifier).identifier;
+    _ = self.consume(.equal);
+    const filtered_expr = try self.parseFilteredExpr();
+    _ = self.consume(.end_tag);
+    return .{ .assign = .{
+        .ident = ident,
+        .filtered_expr = filtered_expr,
+    } };
+}
+
+fn matchIdentifier(self: *Parser, expected: []const u8) bool {
+    const tok = self.peek() orelse return false;
+    switch (tok) {
+        .identifier => |actual| if (std.mem.eql(u8, actual, expected)) {
+            _ = self.advance();
+            return true;
+        },
+        else => {},
+    }
+    return false;
+}
+
+fn parseForTag(self: *Parser) !Ast.Tag {
+    var for_loop = Ast.Tag.For{
+        .iter_ident = undefined,
+        .collection = undefined,
+        .body = undefined,
+    };
+
+    for_loop.iter_ident = self.consume(.identifier).identifier;
+    assert(self.matchIdentifier("in"));
+    for_loop.collection = try self.valueExpr();
+
+    while (self.match(.identifier)) |tok| {
+        const opt = tok.identifier;
+
+        if (std.mem.eql(u8, opt, "limit")) {
+            _ = self.consume(.colon);
+            for_loop.opt_limit = try self.valueExpr();
+        } else if (std.mem.eql(u8, opt, "offset")) {
+            _ = self.consume(.colon);
+            for_loop.opt_offset = try self.valueExpr();
+        } else if (std.mem.eql(u8, opt, "reversed")) {
+            for_loop.opt_reversed = true;
+        } else {
+            unreachable;
+        }
+    }
+
+    _ = self.consume(.end_tag);
+
+    for_loop.body = try self.parseBlock();
+
+    if (self.matchTagStart("else")) {
+        _ = self.consume(.end_tag);
+        for_loop.fallback = try self.parseBlock();
+    }
+
+    assert(self.matchTagStart("endfor"));
+    _ = self.consume(.end_tag);
+
+    return .{ .@"for" = for_loop };
+}
+
 fn valueExpr(self: *Parser) !Ast.ExprRef {
     const root_expr_ref = try self.exprs.addOne(self.scratch);
     const tok = self.advance() orelse unreachable;
@@ -215,6 +281,17 @@ fn valueExpr(self: *Parser) !Ast.ExprRef {
             .empty => .{ .literal = .empty },
             .blank => .{ .literal = .blank },
             else => unreachable,
+        },
+        .open_par => blk: {
+            const start = try self.valueExpr();
+            _ = self.consume(.dot_dot);
+            const end = try self.valueExpr();
+            _ = self.consume(.close_par);
+
+            break :blk .{ .range = .{
+                .start = start,
+                .end = end,
+            } };
         },
         .identifier => |ident| blk: {
             var head = Ast.Expr{ .variable = ident };

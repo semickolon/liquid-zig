@@ -50,6 +50,9 @@ pub const Filter = struct {
 pub const Tag = union(enum) {
     conditional: Conditional,
     assign: Assign,
+    @"for": For,
+    @"break",
+    @"continue",
 
     pub const Conditional = struct {
         branches: []const Branch,
@@ -59,6 +62,16 @@ pub const Tag = union(enum) {
     pub const Assign = struct {
         ident: []const u8,
         filtered_expr: FilteredExpr,
+    };
+
+    pub const For = struct {
+        iter_ident: []const u8,
+        collection: ExprRef,
+        opt_limit: ?ExprRef = null,
+        opt_offset: ?ExprRef = null,
+        opt_reversed: bool = false,
+        body: NodeRef,
+        fallback: ?NodeRef = null,
     };
 
     pub const Branch = struct {
@@ -84,5 +97,9 @@ pub const Expr = union(enum) {
         op: Token.ComparisonOp,
         lhs: ExprRef,
         rhs: ExprRef,
+    },
+    range: struct {
+        start: ExprRef,
+        end: ExprRef,
     },
 };
