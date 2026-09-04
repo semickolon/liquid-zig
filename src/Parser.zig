@@ -144,6 +144,8 @@ fn parseTag(self: *Parser) !?Ast.Tag {
     } else if (self.matchTagStart("continue")) {
         _ = self.consume(.end_tag);
         return .@"continue";
+    } else if (self.matchTagStart("capture")) {
+        return try self.parseCaptureTag();
     }
 
     return null; // Returning null here ends the block parser (e.g., on elsif, endif)
@@ -264,6 +266,20 @@ fn parseForTag(self: *Parser) !Ast.Tag {
     _ = self.consume(.end_tag);
 
     return .{ .@"for" = for_loop };
+}
+
+fn parseCaptureTag(self: *Parser) !Ast.Tag {
+    const ident = self.consume(.identifier).identifier;
+    _ = self.consume(.end_tag);
+    const block = try self.parseBlock();
+
+    assert(self.matchTagStart("endcapture"));
+    _ = self.consume(.end_tag);
+
+    return .{ .capture = .{
+        .ident = ident,
+        .block = block,
+    } };
 }
 
 fn valueExpr(self: *Parser) !Ast.ExprRef {

@@ -53,10 +53,17 @@ pub const Tag = union(enum) {
     @"for": For,
     @"break",
     @"continue",
+    capture: Capture,
 
     pub const Conditional = struct {
         branches: []const Branch,
         fallback: ?NodeRef = null,
+    };
+
+    pub const Branch = struct {
+        condition: ExprRef,
+        unless: bool,
+        block: NodeRef,
     };
 
     pub const Assign = struct {
@@ -74,9 +81,8 @@ pub const Tag = union(enum) {
         fallback: ?NodeRef = null,
     };
 
-    pub const Branch = struct {
-        condition: ExprRef,
-        unless: bool,
+    pub const Capture = struct {
+        ident: []const u8,
         block: NodeRef,
     };
 };

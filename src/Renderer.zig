@@ -192,6 +192,11 @@ fn renderTag(self: *const Renderer, context: Context, writer: *Io.Writer, tag: A
         },
         .@"break" => return .brk,
         .@"continue" => return .cont,
+        .capture => |c| {
+            var allocating = Io.Writer.Allocating.init(self.scratch);
+            assert(try self.renderNode(context, &allocating.writer, c.block) == .none);
+            try context.assign(self.scratch, c.ident, .{ .string = allocating.written() });
+        },
     }
 
     return .none;
@@ -245,8 +250,8 @@ fn evalExprInner(self: *const Renderer, context: Context, expr: Ast.Expr) Error!
             break :blk .{ .bool = result };
         },
         .range => blk: {
-            const iterable = (try self.evalIterableInner(context, expr)).?;
-            const values = try iterable.allocSlice(self.scratch);
+            const iterable = try self.evalIterableInner(context, expr);
+            const values = try iterable.?.allocSlice(self.scratch);
             break :blk .{ .array = values };
         },
     };
