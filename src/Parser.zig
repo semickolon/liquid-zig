@@ -74,16 +74,20 @@ fn parseBlock(self: *Parser) Allocator.Error!Ast.NodeRef {
     };
 }
 
-fn parseObject(self: *Parser) !Ast.Object {
+fn parseObject(self: *Parser) !Ast.FilteredExpr {
     _ = self.consume(.start_object);
+    defer _ = self.consume(.end_object);
+    return self.parseFilteredExpr();
+}
 
+fn parseFilteredExpr(self: *Parser) !Ast.FilteredExpr {
     const expr = try self.valueExpr();
 
-    var filters = std.ArrayList(Ast.Object.Filter).empty;
+    var filters = std.ArrayList(Ast.Filter).empty;
 
     while (self.match(.pipe)) |_| {
         const filter = self.consume(.identifier).identifier;
-        var args = try std.ArrayList(Ast.Object.Arg).initCapacity(self.scratch, 4);
+        var args = try std.ArrayList(Ast.Filter.Arg).initCapacity(self.scratch, 4);
 
         if (self.match(.colon)) |_| {
             args.appendAssumeCapacity(try self.parseFilterArg());
@@ -95,19 +99,17 @@ fn parseObject(self: *Parser) !Ast.Object {
 
         try filters.append(self.scratch, .{
             .name = filter,
-            .args = try self.allocator.dupe(Ast.Object.Arg, args.items),
+            .args = try self.allocator.dupe(Ast.Filter.Arg, args.items),
         });
     }
 
-    _ = self.consume(.end_object);
-
     return .{
         .expr = expr,
-        .filters = try self.allocator.dupe(Ast.Object.Filter, filters.items),
+        .filters = try self.allocator.dupe(Ast.Filter, filters.items),
     };
 }
 
-fn parseFilterArg(self: *Parser) !Ast.Object.Arg {
+fn parseFilterArg(self: *Parser) !Ast.Filter.Arg {
     const name = blk: {
         const tok0 = self.peek() orelse break :blk "";
         const tok1 = self.peekNext() orelse break :blk "";
@@ -132,6 +134,15 @@ fn parseTag(self: *Parser) !?Ast.Tag {
         return try self.parseConditional(false);
     } else if (self.matchTagStart("unless")) {
         return try self.parseConditional(true);
+    } else if (self.matchTagStart("assign")) {
+        const ident = self.consume(.identifier).identifier;
+        _ = self.consume(.equal);
+        const filtered_expr = try self.parseFilteredExpr();
+        _ = self.consume(.end_tag);
+        return .{ .assign = .{
+            .ident = ident,
+            .filtered_expr = filtered_expr,
+        } };
     }
 
     return null; // Returning null here ends the block parser (e.g., on elsif, endif)

@@ -24,31 +24,41 @@ pub const ExprRef = IndexableArrayList(Expr).Ref;
 pub const Node = union(enum) {
     block: []const NodeRef,
     raw: []const u8,
-    object: Object,
+    object: FilteredExpr,
     tag: Tag,
 };
 
-pub const Object = struct {
+pub const FilteredExpr = struct {
     expr: ExprRef,
     filters: []const Filter,
+};
 
-    pub const Filter = struct {
-        name: []const u8,
-        args: []const Arg,
-    };
+pub const Filter = struct {
+    name: []const u8,
+    args: []const Arg,
 
     pub const Arg = struct {
         name: []const u8,
         value: ExprRef,
+
+        pub fn isPositional(self: Arg) bool {
+            return self.name.len == 0;
+        }
     };
 };
 
-pub const Tag = struct {
+pub const Tag = union(enum) {
     conditional: Conditional,
+    assign: Assign,
 
     pub const Conditional = struct {
         branches: []const Branch,
         fallback: ?NodeRef = null,
+    };
+
+    pub const Assign = struct {
+        ident: []const u8,
+        filtered_expr: FilteredExpr,
     };
 
     pub const Branch = struct {
