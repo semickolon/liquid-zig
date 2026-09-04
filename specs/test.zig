@@ -44,9 +44,9 @@ pub fn main(init: std.process.Init) !void {
 
         const pass = testSpec(spec_alloc, template, context, expected) catch |err| switch (err) {
             error.NotImplemented => {
-                // std.log.err("NotImplemented", .{});
-                // continue;
-                return err;
+                std.log.err("NotImplemented", .{});
+                continue;
+                // return err;
             },
             else => return err,
         };

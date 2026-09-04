@@ -236,8 +236,8 @@ pub const Number = union(enum) {
 
     pub fn from(value: anytype) Number {
         return switch (@typeInfo(@TypeOf(value))) {
-            .int => .{ .int = @intCast(value) },
-            .float => .{ .float = @floatCast(value) },
+            .int, .comptime_int => .{ .int = @intCast(value) },
+            .float, .comptime_float => .{ .float = @floatCast(value) },
             else => @panic("Invalid type for Number"),
         };
     }

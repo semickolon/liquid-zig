@@ -19,12 +19,64 @@ const ControlFlow = enum { none, brk, cont };
 const Context = struct {
     dynamic: *std.StringHashMapUnmanaged(liquid.Value),
     static: liquid.Value,
+    for_loop: ?*const ForLoop = null,
 
-    pub fn resolve(self: Context, key: []const u8) liquid.Value {
+    const ForLoop = struct {
+        length: usize,
+        index: usize = 0,
+        hash: std.StringHashMapUnmanaged(liquid.Value) = .empty,
+
+        fn init(scratch: Allocator, length: usize) Allocator.Error!ForLoop {
+            const forloop = .{
+                .length = liquid.Value{ .number = .from(length) },
+                .parentloop = liquid.Value.nil, // TODO
+                .index = liquid.Value{ .number = .from(1) },
+                .index0 = liquid.Value{ .number = .from(0) },
+                .rindex = liquid.Value{ .number = .from(length) },
+                .rindex0 = liquid.Value{ .number = .from(length - 1) },
+                .first = liquid.Value{ .bool = true },
+                .last = liquid.Value{ .bool = length == 1 },
+            };
+            const forloop_fields = comptime std.meta.fieldNames(@TypeOf(forloop));
+
+            var self = ForLoop{ .length = length };
+            try self.hash.ensureTotalCapacity(scratch, forloop_fields.len);
+
+            inline for (forloop_fields) |field_name| {
+                self.hash.putAssumeCapacityNoClobber(field_name, @field(forloop, field_name));
+            }
+
+            return self;
+        }
+
+        fn resolve(self: *const ForLoop) liquid.Value {
+            return .{ .hash = self.hash };
+        }
+
+        fn increment(self: *ForLoop) void {
+            self.index += 1;
+            self.hash.getPtr("index").?.number.int += 1;
+            self.hash.getPtr("index0").?.number.int += 1;
+            self.hash.getPtr("rindex").?.number.int -= 1;
+            self.hash.getPtr("rindex0").?.number.int -= 1;
+
+            if (self.index == 1)
+                self.hash.getPtr("first").?.bool = false;
+
+            if (self.index == self.length - 1)
+                self.hash.getPtr("last").?.bool = true;
+        }
+    };
+
+    fn resolve(self: Context, key: []const u8) liquid.Value {
+        if (self.for_loop) |fl| {
+            if (std.mem.eql(u8, key, "forloop"))
+                return fl.resolve();
+        }
         return self.dynamic.get(key) orelse self.static.get(key);
     }
 
-    pub fn assign(self: Context, scratch: Allocator, key: []const u8, value: liquid.Value) Allocator.Error!void {
+    fn assign(self: Context, scratch: Allocator, key: []const u8, value: liquid.Value) Allocator.Error!void {
         try self.dynamic.put(scratch, key, value);
     }
 };
@@ -88,58 +140,54 @@ fn renderTag(self: *const Renderer, context: Context, writer: *Io.Writer, tag: A
             try context.assign(self.scratch, a.ident, value);
         },
         .@"for" => |f| {
-            const collection = try self.evalExpr(context, f.collection);
-            switch (collection) {
-                .array => |array| {
-                    var slice = array;
+            if (try self.evalIterable(context, f.collection)) |iterable| {
+                var iter_opts = Iterable.IteratorOpts{};
+                iter_opts.reverse = f.opt_reversed;
 
-                    if (f.opt_offset) |expr| {
-                        switch (try self.evalExpr(context, expr)) {
-                            .number => |n| switch (n) {
-                                .int => |offset| slice = slice[@intCast(offset)..],
-                                else => {},
+                if (f.opt_offset) |expr| {
+                    switch (try self.evalExpr(context, expr)) {
+                        .number => |n| switch (n) {
+                            .int => |offset| if (offset >= 0) {
+                                iter_opts.offset = @intCast(offset);
+                            } else {
+                                @panic("Negative forloop offset");
                             },
-                            else => {},
-                        }
+                            else => unreachable,
+                        },
+                        else => unreachable,
                     }
+                }
 
-                    if (f.opt_limit) |expr| {
-                        switch (try self.evalExpr(context, expr)) {
-                            .number => |n| switch (n) {
-                                .int => |limit| if (limit > 0) {
-                                    slice = slice[0..@intCast(limit)];
-                                },
-                                else => {},
+                if (f.opt_limit) |expr| {
+                    switch (try self.evalExpr(context, expr)) {
+                        .number => |n| switch (n) {
+                            .int => |limit| if (limit >= 0) {
+                                iter_opts.limit = @intCast(limit);
+                            } else {
+                                @panic("Negative forloop limit");
                             },
-                            else => {},
-                        }
+                            else => unreachable,
+                        },
+                        else => unreachable,
                     }
+                }
 
-                    if (slice.len == 0) {
-                        if (f.fallback) |fb|
-                            return try self.renderNode(context, writer, fb);
-                    } else {
-                        for (0..slice.len) |loop_idx| {
-                            const item_idx = if (f.opt_reversed)
-                                slice.len - loop_idx - 1
-                            else
-                                loop_idx;
-                            const item = slice[item_idx];
+                var iter = iterable.iterator(iter_opts);
+                var forloop = try Context.ForLoop.init(self.scratch, iter.remaining);
+                var context_inner = context;
+                context_inner.for_loop = &forloop; // TODO nesting
 
-                            try context.assign(self.scratch, f.iter_ident, item); // TODO lmao this is not how it's supposed to be
-
-                            const cf = try self.renderNode(context, writer, f.body);
-                            switch (cf) {
-                                .none => {},
-                                .brk => break,
-                                .cont => continue,
-                            }
-                        }
-
-                        try context.assign(self.scratch, f.iter_ident, .nil); // TODO lmao this is not how it's supposed to be
+                while (iter.next()) |item| : (forloop.increment()) {
+                    try context_inner.assign(self.scratch, f.iter_ident, item);
+                    const cf = try self.renderNode(context_inner, writer, f.body);
+                    switch (cf) {
+                        .none => {},
+                        .brk => break,
+                        .cont => continue,
                     }
-                },
-                else => return error.NotImplemented,
+                }
+            } else if (f.fallback) |fb| {
+                return try self.renderNode(context, writer, fb);
             }
         },
         .@"break" => return .brk,
@@ -159,8 +207,12 @@ fn evalFilteredExpr(self: *const Renderer, context: Context, filtered_expr: Ast.
     return value;
 }
 
-fn evalExpr(self: *const Renderer, context: Context, ref: Ast.ExprRef) error{NotImplemented}!liquid.Value {
-    return switch (self.exprPtr(ref).*) {
+fn evalExpr(self: *const Renderer, context: Context, ref: Ast.ExprRef) Error!liquid.Value {
+    return self.evalExprInner(context, self.exprPtr(ref).*);
+}
+
+fn evalExprInner(self: *const Renderer, context: Context, expr: Ast.Expr) Error!liquid.Value {
+    return switch (expr) {
         .literal => |lit| lit,
         .variable => |v| context.resolve(v),
         .property => |f| (try self.evalExpr(context, f.parent)).get(f.name),
@@ -192,22 +244,42 @@ fn evalExpr(self: *const Renderer, context: Context, ref: Ast.ExprRef) error{Not
 
             break :blk .{ .bool = result };
         },
-        .range => |r| blk: { // TODO ??
-            const start = (try self.evalExpr(context, r.start)).number.int;
-            const end = (try self.evalExpr(context, r.end)).number.int;
-            assert(start <= end);
-
-            const array = self.scratch.alloc(liquid.Value, @intCast(end - start + 1)) catch unreachable;
-            var cur = start;
-
-            for (array) |*e| {
-                e.* = .{ .number = .from(cur) };
-                cur += 1;
-            }
-
-            break :blk .{ .array = array };
+        .range => blk: {
+            const iterable = (try self.evalIterableInner(context, expr)).?;
+            const values = try iterable.allocSlice(self.scratch);
+            break :blk .{ .array = values };
         },
     };
+}
+
+fn evalIterable(self: *const Renderer, context: Context, ref: Ast.ExprRef) Error!?Iterable {
+    return self.evalIterableInner(context, self.exprPtr(ref).*);
+}
+
+// Returns null if evaluated value is either non-iterable or a zero-size iterable
+fn evalIterableInner(self: *const Renderer, context: Context, expr: Ast.Expr) Error!?Iterable {
+    switch (expr) {
+        .range => |r| {
+            const start = (try self.evalExpr(context, r.start)).number.int;
+            const end = (try self.evalExpr(context, r.end)).number.int;
+
+            if (start > end) {
+                @panic("Range start is greater than range end");
+            }
+            // Apparently, ranges can never be zero-size
+            return .{ .range = .{
+                .start = start,
+                .count = @intCast(end - start + 1),
+            } };
+        },
+        else => switch (try self.evalExprInner(context, expr)) {
+            .array => |a| {
+                if (a.len == 0) return null;
+                return .{ .array = a };
+            },
+            else => return null,
+        },
+    }
 }
 
 fn nodePtr(self: *const Renderer, ref: Ast.NodeRef) *const Ast.Node {
@@ -266,11 +338,6 @@ fn makePositionalArgs(self: *const Renderer, comptime len: comptime_int, context
 
     return args;
 }
-
-const FilterInfo = struct {
-    scratch: Allocator,
-    input: liquid.Value,
-};
 
 inline fn safeGetTag(e: anytype, comptime tag: std.meta.Tag(@TypeOf(e))) ?@FieldType(@TypeOf(e), @tagName(tag)) {
     if (std.meta.activeTag(e) == tag) {
@@ -339,6 +406,95 @@ const Filters = struct {
         return switch (in) {
             .string => |src| .{ .string = try std.ascii.allocUpperString(scratch, src) },
             else => in,
+        };
+    }
+};
+
+const Iterable = union(enum) {
+    array: []const liquid.Value,
+    range: struct {
+        start: i32,
+        count: u32,
+    },
+
+    const Iterator = struct {
+        iterable: *const Iterable,
+        idx: usize,
+        remaining: usize,
+        reverse: bool,
+
+        fn next(self: *Iterator) ?liquid.Value {
+            if (self.remaining == 0) return null;
+
+            defer {
+                if (self.reverse) {
+                    // This is wrapping because at the end of the iterable, idx=0 will decrement
+                    // and we don't care about the wrap because it would be remaining == 0
+                    self.idx -%= 1;
+                } else {
+                    // Doesn't really need to wrap, but for consistency with above
+                    self.idx +%= 1;
+                }
+                self.remaining -= 1;
+            }
+
+            return switch (self.iterable.*) {
+                .array => |a| a[self.idx],
+                .range => |r| .{ .number = .{ .int = r.start + @as(i32, @intCast(self.idx)) } },
+            };
+        }
+    };
+
+    const IteratorOpts = struct {
+        limit: usize = 0,
+        offset: usize = 0,
+        reverse: bool = false,
+    };
+
+    fn size(self: *const Iterable) usize {
+        return switch (self.*) {
+            .array => |a| a.len,
+            .range => |r| r.count,
+        };
+    }
+
+    fn iterator(self: *const Iterable, opts: IteratorOpts) Iterator {
+        const total_size = self.size();
+        const size_minus_offset = total_size - opts.offset;
+
+        const iter_size = if (opts.limit == 0)
+            size_minus_offset
+        else
+            @min(opts.limit, size_minus_offset);
+
+        const start_idx = if (opts.reverse)
+            total_size - opts.offset - 1
+        else
+            opts.offset;
+
+        return .{
+            .iterable = self,
+            .idx = start_idx,
+            .remaining = iter_size,
+            .reverse = opts.reverse,
+        };
+    }
+
+    // Allocates ranges only. Arrays are returned by reference.
+    fn allocSlice(self: *const Iterable, allocator: Allocator) Allocator.Error![]const liquid.Value {
+        return switch (self.*) {
+            .array => |a| a,
+            .range => |r| blk: {
+                const values = try allocator.alloc(liquid.Value, r.count);
+                var cur = r.start;
+
+                for (0..r.count) |i| {
+                    values[i] = .{ .number = .from(cur) };
+                    cur += 1;
+                }
+
+                break :blk values;
+            },
         };
     }
 };
