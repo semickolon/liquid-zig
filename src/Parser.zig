@@ -144,6 +144,8 @@ const TagName = enum {
     case,
     when,
     endcase,
+    increment,
+    decrement,
 };
 
 // Returning null here ends the block parser (e.g., on elsif, endif)
@@ -171,6 +173,16 @@ fn parseTag(self: *Parser) !?Ast.Tag {
         },
         .capture => try self.parseCaptureTag(),
         .case => try self.parseCaseTag(),
+        .increment => blk: {
+            const ident = self.consumeType(.identifier);
+            self.consume(.end_tag);
+            break :blk .{ .increment = ident };
+        },
+        .decrement => blk: {
+            const ident = self.consumeType(.identifier);
+            self.consume(.end_tag);
+            break :blk .{ .decrement = ident };
+        },
         else => unreachable,
     };
 }

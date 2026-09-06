@@ -18,6 +18,7 @@ const ControlFlow = enum { none, brk, cont };
 
 const Context = struct {
     dynamic: *std.StringHashMapUnmanaged(liquid.Value),
+    counters: *std.StringHashMapUnmanaged(i32),
     static: liquid.Value,
     for_loop: ?*const ForLoop = null,
 
@@ -79,6 +80,22 @@ const Context = struct {
     fn assign(self: Context, scratch: Allocator, key: []const u8, value: liquid.Value) Allocator.Error!void {
         try self.dynamic.put(scratch, key, value);
     }
+
+    fn count(self: Context, scratch: Allocator, key: []const u8, increment: bool) Allocator.Error!i32 {
+        const entry = try self.counters.getOrPut(scratch, key);
+
+        if (entry.found_existing) {
+            if (increment) {
+                entry.value_ptr.* += 1;
+            } else {
+                entry.value_ptr.* -= 1;
+            }
+        } else {
+            entry.value_ptr.* = if (increment) 0 else -1;
+        }
+
+        return entry.value_ptr.*;
+    }
 };
 
 pub fn render(allocator: Allocator, writer: *Io.Writer, ast: liquid.Ast, static_env: liquid.Value) Error!void {
@@ -86,8 +103,11 @@ pub fn render(allocator: Allocator, writer: *Io.Writer, ast: liquid.Ast, static_
     defer arena.deinit();
 
     var dynamic = std.StringHashMapUnmanaged(liquid.Value).empty;
+    var counters = std.StringHashMapUnmanaged(i32).empty;
+
     const context = Context{
         .dynamic = &dynamic,
+        .counters = &counters,
         .static = static_env,
     };
 
@@ -228,6 +248,14 @@ fn renderTag(self: *const Renderer, context: Context, writer: *Io.Writer, tag: A
                     }
                 }
             }
+        },
+        .increment => |ident| {
+            const n = try context.count(self.scratch, ident, true);
+            try writer.printInt(n, 10, .lower, .{});
+        },
+        .decrement => |ident| {
+            const n = try context.count(self.scratch, ident, false);
+            try writer.printInt(n, 10, .lower, .{});
         },
     }
 

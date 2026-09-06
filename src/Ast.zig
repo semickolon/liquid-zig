@@ -55,6 +55,8 @@ pub const Tag = union(enum) {
     @"continue",
     capture: Capture,
     case: Case,
+    increment: []const u8,
+    decrement: []const u8,
 
     pub const Conditional = struct {
         branches: []const Branch,
