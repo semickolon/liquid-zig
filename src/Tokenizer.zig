@@ -8,6 +8,8 @@ const lib = @import("lib.zig");
 
 const Tokenizer = @This();
 
+const ParseNumberError = std.fmt.ParseIntError || std.fmt.ParseFloatError;
+
 allocator: Allocator,
 src: []const u8,
 tokens: std.ArrayList(Token),
@@ -32,7 +34,10 @@ fn root(self: *Tokenizer) Allocator.Error!void {
         if (self.raw_mode) {
             try self.raw();
         } else {
-            try self.nonRaw();
+            self.nonRaw() catch |err| switch (err) {
+                error.InvalidCharacter, error.Overflow => @panic("Parse number failed"),
+                else => |other| return other,
+            };
         }
     }
 
@@ -64,12 +69,12 @@ fn raw(self: *Tokenizer) Allocator.Error!void {
     self.raw_mode = false;
 }
 
-fn nonRaw(self: *Tokenizer) Allocator.Error!void {
+fn nonRaw(self: *Tokenizer) (Allocator.Error || ParseNumberError)!void {
     self.start = self.pos;
 
     const tok: Token = switch (self.advance().?) {
         '-' => switch (self.peek() orelse unreachable) {
-            '0'...'9' => self.numberToken('-'),
+            '0'...'9' => try self.numberToken('-'),
             '}', '%' => |c| blk: {
                 self.consume(c);
                 break :blk self.endToken(c, true);
@@ -83,7 +88,7 @@ fn nonRaw(self: *Tokenizer) Allocator.Error!void {
         '.' => if (self.match('.'))
             .dot_dot
         else if (isDigit(self.peek() orelse unreachable))
-            self.numberToken('.')
+            try self.numberToken('.')
         else
             .dot,
         '(' => .open_par,
@@ -103,7 +108,7 @@ fn nonRaw(self: *Tokenizer) Allocator.Error!void {
             .lt,
         '>' => if (self.match('=')) .gt_equal else .gt,
         '\'', '"' => |sentinel| self.stringToken(sentinel),
-        '0'...'9' => |c| self.numberToken(c),
+        '0'...'9' => |c| try self.numberToken(c),
         'a'...'z', 'A'...'Z', '_' => self.identifierToken(),
         else => |c| {
             if (isWhitespace(c)) return;
@@ -124,17 +129,20 @@ fn stringToken(self: *Tokenizer, sentinel: u8) Token {
     unreachable;
 }
 
-fn numberToken(self: *Tokenizer, first_char: u8) Token {
+fn numberToken(self: *Tokenizer, first_char: u8) ParseNumberError!Token {
     var fractional = first_char == '.';
 
     if (!fractional) {
         if (first_char == '-') self.consumeFn(isDigit);
         self.matchWhile(isDigit);
-        fractional = self.match('.');
 
-        if (self.peek() == '.') {
-            self.pos -= 1; // TODO wtf
-            return .{ .int = std.fmt.parseInt(i32, self.src[self.start..self.pos], 10) catch unreachable };
+        if (self.peek() orelse 0 == '.') {
+            if (self.peekNext() orelse 0 == '.') {
+                // .dot_dot token found for range; let nonRaw tokenize this
+            } else {
+                _ = self.advance();
+                fractional = true;
+            }
         }
     }
 
@@ -148,9 +156,9 @@ fn numberToken(self: *Tokenizer, first_char: u8) Token {
     const str = self.src[self.start..self.pos];
 
     if (fractional) {
-        return .{ .float = std.fmt.parseFloat(f32, str) catch unreachable };
+        return .{ .float = try std.fmt.parseFloat(f32, str) };
     } else {
-        return .{ .int = std.fmt.parseInt(i32, str, 10) catch unreachable };
+        return .{ .int = try std.fmt.parseInt(i32, str, 10) };
     }
 }
 
@@ -196,6 +204,13 @@ fn peek(self: *const Tokenizer) ?u8 {
         null
     else
         self.src[self.pos];
+}
+
+fn peekNext(self: *const Tokenizer) ?u8 {
+    return if (self.pos + 1 >= self.src.len)
+        null
+    else
+        self.src[self.pos + 1];
 }
 
 fn isAtEnd(self: *const Tokenizer) bool {

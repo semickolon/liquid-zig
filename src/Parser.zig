@@ -49,12 +49,12 @@ pub fn parse(allocator: Allocator, scratch: Allocator, src: []const Token) !Ast 
 fn parseBlock(self: *Parser) Allocator.Error!Ast.NodeRef {
     var children = try std.ArrayList(Ast.NodeRef).initCapacity(self.scratch, 8);
 
-    while (!self.isAtEnd()) {
+    while (self.peek()) |tok| {
         const child_ref = try self.nodes.addOne(self.scratch);
 
-        const child_node: Ast.Node = switch (self.peek().?) {
+        const child_node: Ast.Node = switch (tok) {
             .raw => |raw| blk: {
-                _ = self.advance();
+                self.advanceIgnoreToken();
                 break :blk .{ .raw = raw };
             },
             .start_object => .{ .object = try self.parseObject() },
@@ -75,18 +75,18 @@ fn parseBlock(self: *Parser) Allocator.Error!Ast.NodeRef {
 }
 
 fn parseObject(self: *Parser) !Ast.FilteredExpr {
-    _ = self.consume(.start_object);
-    defer _ = self.consume(.end_object);
+    self.consume(.start_object);
+    defer self.consume(.end_object);
     return self.parseFilteredExpr();
 }
 
 fn parseFilteredExpr(self: *Parser) !Ast.FilteredExpr {
-    const expr = try self.valueExpr();
+    const expr = try self.parseValueExpr();
 
     var filters = std.ArrayList(Ast.Filter).empty;
 
     while (self.match(.pipe)) |_| {
-        const filter = self.consume(.identifier).identifier;
+        const filter = self.consumeType(.identifier);
         var args = try std.ArrayList(Ast.Filter.Arg).initCapacity(self.scratch, 4);
 
         if (self.match(.colon)) |_| {
@@ -111,13 +111,11 @@ fn parseFilteredExpr(self: *Parser) !Ast.FilteredExpr {
 
 fn parseFilterArg(self: *Parser) !Ast.Filter.Arg {
     const name = blk: {
-        const tok0 = self.peek() orelse break :blk "";
-        const tok1 = self.peekNext() orelse break :blk "";
+        const cur_tok, const next_tok = self.peekCurAndNext() orelse break :blk "";
 
-        if (activeTag(tok0) == .identifier and tok1 == .colon) {
-            const s = self.consume(.identifier).identifier;
-            _ = self.consume(.colon);
-            break :blk s;
+        if (activeTag(cur_tok) == .identifier and next_tok == .colon) {
+            self.advanceTwiceIgnoreTokens();
+            break :blk cur_tok.identifier;
         }
 
         break :blk "";
@@ -125,47 +123,72 @@ fn parseFilterArg(self: *Parser) !Ast.Filter.Arg {
 
     return .{
         .name = name,
-        .value = try self.valueExpr(),
+        .value = try self.parseValueExpr(),
     };
 }
 
+const TagName = enum {
+    @"if",
+    elsif,
+    @"else",
+    endif,
+    unless,
+    endunless,
+    @"for",
+    endfor,
+    capture,
+    endcapture,
+    assign,
+    @"break",
+    @"continue",
+};
+
+// Returning null here ends the block parser (e.g., on elsif, endif)
 fn parseTag(self: *Parser) !?Ast.Tag {
-    if (self.matchTagStart("if")) {
-        return try self.parseConditionalTag(false);
-    } else if (self.matchTagStart("unless")) {
-        return try self.parseConditionalTag(true);
-    } else if (self.matchTagStart("assign")) {
-        return try self.parseAssignTag();
-    } else if (self.matchTagStart("for")) {
-        return try self.parseForTag();
-    } else if (self.matchTagStart("break")) {
-        _ = self.consume(.end_tag);
-        return .@"break";
-    } else if (self.matchTagStart("continue")) {
-        _ = self.consume(.end_tag);
-        return .@"continue";
-    } else if (self.matchTagStart("capture")) {
-        return try self.parseCaptureTag();
+    const tag_name = self.peekTagStart() orelse unreachable;
+
+    switch (tag_name) {
+        // Block terminators
+        .elsif, .@"else", .endif, .endunless, .endfor, .endcapture => return null,
+        else => self.advanceTwiceIgnoreTokens(),
     }
 
-    return null; // Returning null here ends the block parser (e.g., on elsif, endif)
-    // TODO: panic on unrecognized keywords
+    return switch (tag_name) {
+        .@"if" => try self.parseConditionalTag(false),
+        .unless => try self.parseConditionalTag(true),
+        .assign => try self.parseAssignTag(),
+        .@"for" => try self.parseForTag(),
+        .@"break" => blk: {
+            self.consume(.end_tag);
+            break :blk .@"break";
+        },
+        .@"continue" => blk: {
+            self.consume(.end_tag);
+            break :blk .@"continue";
+        },
+        .capture => try self.parseCaptureTag(),
+        else => unreachable,
+    };
 }
 
-fn matchTagStart(self: *Parser, expected: []const u8) bool {
-    const cur_tok = self.peek() orelse return false;
-    if (cur_tok != .start_tag) return false;
+fn peekTagStart(self: *Parser) ?TagName {
+    const cur_tok, const next_tok = self.peekCurAndNext() orelse return null;
 
-    const next_tok = self.peekNext() orelse return false;
+    if (cur_tok != .start_tag)
+        return null;
 
-    switch (next_tok) {
-        .identifier => |actual| if (std.mem.eql(u8, actual, expected)) {
-            self.pos += 2;
-            return true;
-        },
-        else => {},
+    return switch (next_tok) {
+        .identifier => |ident| std.meta.stringToEnum(TagName, ident),
+        else => null,
+    };
+}
+
+fn matchTagStart(self: *Parser, expected: TagName) bool {
+    const actual = self.peekTagStart() orelse return false;
+    if (actual == expected) {
+        self.advanceTwiceIgnoreTokens();
+        return true;
     }
-
     return false;
 }
 
@@ -173,17 +196,17 @@ fn parseConditionalTag(self: *Parser, unless: bool) !Ast.Tag {
     var branches = try std.ArrayList(Ast.Tag.Branch).initCapacity(self.scratch, 4);
     branches.appendAssumeCapacity(try self.parseBranch(unless));
 
-    while (self.matchTagStart("elsif")) {
+    while (self.matchTagStart(.elsif)) {
         try branches.append(self.scratch, try self.parseBranch(false));
     }
 
-    const else_block: ?Ast.NodeRef = if (self.matchTagStart("else")) blk: {
-        _ = self.consume(.end_tag);
+    const else_block: ?Ast.NodeRef = if (self.matchTagStart(.@"else")) blk: {
+        self.consume(.end_tag);
         break :blk try self.parseBlock();
     } else null;
 
-    assert(self.matchTagStart(if (unless) "endunless" else "endif"));
-    _ = self.consume(.end_tag);
+    assert(self.matchTagStart(if (unless) .endunless else .endif));
+    self.consume(.end_tag);
 
     return .{ .conditional = .{
         .branches = try self.allocator.dupe(Ast.Tag.Branch, branches.items),
@@ -192,8 +215,8 @@ fn parseConditionalTag(self: *Parser, unless: bool) !Ast.Tag {
 }
 
 fn parseBranch(self: *Parser, unless: bool) !Ast.Tag.Branch {
-    const condition = try self.conditionExpr();
-    _ = self.consume(.end_tag);
+    const condition = try self.parseConditionExpr();
+    self.consume(.end_tag);
     const block = try self.parseBlock();
 
     return .{
@@ -204,10 +227,11 @@ fn parseBranch(self: *Parser, unless: bool) !Ast.Tag.Branch {
 }
 
 fn parseAssignTag(self: *Parser) !Ast.Tag {
-    const ident = self.consume(.identifier).identifier;
-    _ = self.consume(.equal);
+    const ident = self.consumeType(.identifier);
+    self.consume(.equal);
     const filtered_expr = try self.parseFilteredExpr();
-    _ = self.consume(.end_tag);
+    self.consume(.end_tag);
+
     return .{ .assign = .{
         .ident = ident,
         .filtered_expr = filtered_expr,
@@ -218,7 +242,7 @@ fn matchIdentifier(self: *Parser, expected: []const u8) bool {
     const tok = self.peek() orelse return false;
     switch (tok) {
         .identifier => |actual| if (std.mem.eql(u8, actual, expected)) {
-            _ = self.advance();
+            self.advanceIgnoreToken();
             return true;
         },
         else => {},
@@ -233,19 +257,19 @@ fn parseForTag(self: *Parser) !Ast.Tag {
         .body = undefined,
     };
 
-    for_loop.iter_ident = self.consume(.identifier).identifier;
+    for_loop.iter_ident = self.consumeType(.identifier);
     assert(self.matchIdentifier("in"));
-    for_loop.collection = try self.valueExpr();
+    for_loop.collection = try self.parseValueExpr();
 
     while (self.match(.identifier)) |tok| {
         const opt = tok.identifier;
 
         if (std.mem.eql(u8, opt, "limit")) {
-            _ = self.consume(.colon);
-            for_loop.opt_limit = try self.valueExpr();
+            self.consume(.colon);
+            for_loop.opt_limit = try self.parseValueExpr();
         } else if (std.mem.eql(u8, opt, "offset")) {
-            _ = self.consume(.colon);
-            for_loop.opt_offset = try self.valueExpr();
+            self.consume(.colon);
+            for_loop.opt_offset = try self.parseValueExpr();
         } else if (std.mem.eql(u8, opt, "reversed")) {
             for_loop.opt_reversed = true;
         } else {
@@ -253,28 +277,28 @@ fn parseForTag(self: *Parser) !Ast.Tag {
         }
     }
 
-    _ = self.consume(.end_tag);
+    self.consume(.end_tag);
 
     for_loop.body = try self.parseBlock();
 
-    if (self.matchTagStart("else")) {
-        _ = self.consume(.end_tag);
+    if (self.matchTagStart(.@"else")) {
+        self.consume(.end_tag);
         for_loop.fallback = try self.parseBlock();
     }
 
-    assert(self.matchTagStart("endfor"));
-    _ = self.consume(.end_tag);
+    assert(self.matchTagStart(.endfor));
+    self.consume(.end_tag);
 
     return .{ .@"for" = for_loop };
 }
 
 fn parseCaptureTag(self: *Parser) !Ast.Tag {
-    const ident = self.consume(.identifier).identifier;
-    _ = self.consume(.end_tag);
+    const ident = self.consumeType(.identifier);
+    self.consume(.end_tag);
     const block = try self.parseBlock();
 
-    assert(self.matchTagStart("endcapture"));
-    _ = self.consume(.end_tag);
+    assert(self.matchTagStart(.endcapture));
+    self.consume(.end_tag);
 
     return .{ .capture = .{
         .ident = ident,
@@ -282,7 +306,7 @@ fn parseCaptureTag(self: *Parser) !Ast.Tag {
     } };
 }
 
-fn valueExpr(self: *Parser) !Ast.ExprRef {
+fn parseValueExpr(self: *Parser) !Ast.ExprRef {
     const root_expr_ref = try self.exprs.addOne(self.scratch);
     const tok = self.advance() orelse unreachable;
 
@@ -298,10 +322,10 @@ fn valueExpr(self: *Parser) !Ast.ExprRef {
             else => unreachable,
         },
         .open_par => blk: {
-            const start = try self.valueExpr();
-            _ = self.consume(.dot_dot);
-            const end = try self.valueExpr();
-            _ = self.consume(.close_par);
+            const start = try self.parseValueExpr();
+            self.consume(.dot_dot);
+            const end = try self.parseValueExpr();
+            self.consume(.close_par);
 
             break :blk .{ .range = .{
                 .start = start,
@@ -313,7 +337,7 @@ fn valueExpr(self: *Parser) !Ast.ExprRef {
 
             while (!self.isAtEnd()) {
                 if (self.matchAny(&.{ .dot, .open_brc })) |start_tok| {
-                    const name = self.consume(.identifier).identifier;
+                    const name = self.consumeType(.identifier);
                     const parent = try self.exprs.append(self.scratch, head);
 
                     head = .{ .property = .{
@@ -323,7 +347,7 @@ fn valueExpr(self: *Parser) !Ast.ExprRef {
 
                     switch (start_tok) {
                         .dot => {},
-                        .open_brc => _ = self.consume(.close_brc),
+                        .open_brc => self.consume(.close_brc),
                         else => unreachable,
                     }
                 } else {
@@ -340,13 +364,13 @@ fn valueExpr(self: *Parser) !Ast.ExprRef {
     return root_expr_ref;
 }
 
-fn conditionExpr(self: *Parser) !Ast.ExprRef {
-    var head = try self.comparisonExpr();
+fn parseConditionExpr(self: *Parser) !Ast.ExprRef {
+    var head = try self.parseComparisonExpr();
 
     if (self.peek()) |tok| {
         switch (tok) {
             .keyword => |kw| if (kw == .@"and" or kw == .@"or") {
-                _ = self.advance();
+                self.advanceIgnoreToken();
                 const expr_ref = try self.exprs.addOne(self.scratch);
 
                 expr_ref.ptr(self.exprs).* = .{ .logical = .{
@@ -356,7 +380,7 @@ fn conditionExpr(self: *Parser) !Ast.ExprRef {
                         else => unreachable,
                     },
                     .lhs = head,
-                    .rhs = try self.conditionExpr(),
+                    .rhs = try self.parseConditionExpr(),
                 } };
 
                 head = expr_ref;
@@ -368,8 +392,8 @@ fn conditionExpr(self: *Parser) !Ast.ExprRef {
     return head;
 }
 
-fn comparisonExpr(self: *Parser) !Ast.ExprRef {
-    var head = try self.valueExpr();
+fn parseComparisonExpr(self: *Parser) !Ast.ExprRef {
+    var head = try self.parseValueExpr();
 
     if (self.match(.comparison_op)) |tok| {
         const expr_ref = try self.exprs.addOne(self.scratch);
@@ -377,7 +401,7 @@ fn comparisonExpr(self: *Parser) !Ast.ExprRef {
         expr_ref.ptr(self.exprs).* = .{ .comparison = .{
             .op = tok.comparison_op,
             .lhs = head,
-            .rhs = try self.valueExpr(),
+            .rhs = try self.parseValueExpr(),
         } };
 
         head = expr_ref;
@@ -438,10 +462,23 @@ fn advance(self: *Parser) ?Token {
     return self.peek();
 }
 
-fn consume(self: *Parser, tag: TokenTag) Token {
-    const tok = self.advance() orelse unreachable;
+fn advanceIgnoreToken(self: *Parser) void {
+    self.pos += 1;
+}
+
+fn advanceTwiceIgnoreTokens(self: *Parser) void {
+    self.pos += 2;
+}
+
+fn consume(self: *Parser, expected: Token) void {
+    const tok = self.advance().?;
+    assert(std.meta.eql(tok, expected));
+}
+
+fn consumeType(self: *Parser, comptime tag: TokenTag) @FieldType(Token, @tagName(tag)) {
+    const tok = self.advance().?;
     assert(activeTag(tok) == tag);
-    return tok;
+    return @field(tok, @tagName(tag));
 }
 
 fn peek(self: *const Parser) ?Token {
@@ -451,11 +488,11 @@ fn peek(self: *const Parser) ?Token {
         self.src[self.pos];
 }
 
-fn peekNext(self: *const Parser) ?Token {
+fn peekCurAndNext(self: *const Parser) ?[2]Token {
     return if (self.pos + 1 >= self.src.len)
         null
     else
-        self.src[self.pos + 1];
+        .{ self.src[self.pos], self.src[self.pos + 1] };
 }
 
 fn isAtEnd(self: *const Parser) bool {
