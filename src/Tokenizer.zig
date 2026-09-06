@@ -16,6 +16,7 @@ tokens: std.ArrayList(Token),
 start: usize = 0,
 pos: usize = 0,
 raw_mode: bool = true,
+comment_mode: bool = false,
 
 pub fn tokenize(allocator: Allocator, src: []const u8) Allocator.Error![]Token {
     var t = Tokenizer{
@@ -168,6 +169,22 @@ fn identifierToken(self: *Tokenizer) Token {
     return Token.keyword_map.get(ident) orelse .{ .identifier = ident };
 }
 
+fn checkTagStart(self: *const Tokenizer, expected_ident: []const u8) bool {
+    const tokens_len = self.tokens.items.len;
+    if (tokens_len < 2)
+        return false;
+
+    const actual_toks = self.tokens.items[tokens_len - 2 ..];
+
+    if (actual_toks[0] != .start_tag)
+        return false;
+
+    return switch (actual_toks[1]) {
+        .identifier => |actual_ident| std.mem.eql(u8, actual_ident, expected_ident),
+        else => false,
+    };
+}
+
 fn endToken(self: *Tokenizer, first_char: u8, trim_start_next_raw: bool) Token {
     self.consume('}');
 
@@ -186,7 +203,33 @@ fn endToken(self: *Tokenizer, first_char: u8, trim_start_next_raw: bool) Token {
 }
 
 fn appendToken(self: *Tokenizer, tok: Token) Allocator.Error!void {
-    try self.tokens.append(self.allocator, tok);
+    if (self.raw_mode and tok == .end_tag and self.checkTagStart("comment")) {
+        self.tokens.items.len -= 2;
+
+        const sentinel = "{%- endcomment -%}";
+        var sentinel_pos: usize = 0;
+
+        while (sentinel_pos < sentinel.len) {
+            const sentinel_char = sentinel[sentinel_pos];
+
+            if (sentinel_char == '-') {
+                _ = self.match('-');
+                sentinel_pos += 1;
+            } else if (isWhitespace(sentinel_char)) {
+                self.matchWhile(isWhitespace);
+                sentinel_pos += 1;
+            } else if (self.match(sentinel_char)) {
+                sentinel_pos += 1;
+            } else {
+                _ = self.advance() orelse break;
+                sentinel_pos = 0;
+            }
+        }
+
+        self.start = self.pos;
+    } else {
+        try self.tokens.append(self.allocator, tok);
+    }
 }
 
 fn appendRawToken(self: *Tokenizer, str: []const u8) Allocator.Error!void {
