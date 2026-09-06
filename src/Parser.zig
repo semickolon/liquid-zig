@@ -311,11 +311,11 @@ fn parseCaptureTag(self: *Parser) !Ast.Tag {
 }
 
 fn parseCaseTag(self: *Parser) !Ast.Tag {
-    const actual_expr = self.parseValueExpr();
+    const actual_expr = try self.parseValueExpr();
     self.consume(.end_tag);
 
-    const prongs = try std.ArrayList(Ast.Tag.Case.Prong).initCapacity(self.scratch, 4);
-    const else_bodies = try std.ArrayList(Ast.NodeRef).initCapacity(self.scratch, 2);
+    var prongs = try std.ArrayList(Ast.Tag.Case.Prong).initCapacity(self.scratch, 4);
+    var else_bodies = try std.ArrayList(Ast.NodeRef).initCapacity(self.scratch, 2);
 
     var tag: TagName = blk: while (true) {
         // Discard content until next tag
@@ -329,8 +329,26 @@ fn parseCaseTag(self: *Parser) !Ast.Tag {
 
     while (true) {
         switch (tag) {
-            .when => unreachable,
-            .@"else" => unreachable,
+            .when => {
+                var expected_exprs = try std.ArrayList(Ast.ExprRef).initCapacity(self.scratch, 1);
+                expected_exprs.appendAssumeCapacity(try self.parseValueExpr());
+
+                while (self.match(.comma)) |_| {
+                    try expected_exprs.append(self.scratch, try self.parseValueExpr());
+                }
+
+                self.consume(.end_tag);
+                const body = try self.parseBlock();
+
+                try prongs.append(self.scratch, .{
+                    .expected = try self.allocator.dupe(Ast.ExprRef, expected_exprs.items),
+                    .body = body,
+                });
+            },
+            .@"else" => {
+                self.consume(.end_tag);
+                try else_bodies.append(self.scratch, try self.parseBlock());
+            },
             .endcase => {
                 self.consume(.end_tag);
                 break;
@@ -339,7 +357,14 @@ fn parseCaseTag(self: *Parser) !Ast.Tag {
         }
 
         tag = self.peekTagStart() orelse unreachable;
+        self.advanceTwiceIgnoreTokens(); // TODO kinda smelly
     }
+
+    return .{ .case = .{
+        .actual = actual_expr,
+        .prongs = try self.allocator.dupe(Ast.Tag.Case.Prong, prongs.items),
+        .fallback = try self.allocator.dupe(Ast.NodeRef, else_bodies.items),
+    } };
 }
 
 fn parseValueExpr(self: *Parser) !Ast.ExprRef {

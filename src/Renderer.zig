@@ -197,6 +197,38 @@ fn renderTag(self: *const Renderer, context: Context, writer: *Io.Writer, tag: A
             assert(try self.renderNode(context, &allocating.writer, c.block) == .none);
             try context.assign(self.scratch, c.ident, .{ .string = allocating.written() });
         },
+        .case => |c| {
+            const actual = try self.evalExpr(context, c.actual);
+            var has_match = false;
+
+            prong_loop: for (c.prongs) |prong| {
+                for (prong.expected) |expected_expr| {
+                    const expected = try self.evalExpr(context, expected_expr);
+
+                    if (actual.eql(expected)) {
+                        has_match = true;
+
+                        const cf = try self.renderNode(context, writer, prong.body);
+                        switch (cf) {
+                            .brk => break :prong_loop,
+                            .cont => @panic("Not implemented"),
+                            .none => break,
+                        }
+                    }
+                }
+            }
+
+            if (!has_match) {
+                for (c.fallback) |else_block| {
+                    const cf = try self.renderNode(context, writer, else_block);
+                    switch (cf) {
+                        .brk => break,
+                        .cont => @panic("Not implemented"),
+                        .none => {},
+                    }
+                }
+            }
+        },
     }
 
     return .none;

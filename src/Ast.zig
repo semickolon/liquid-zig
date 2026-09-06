@@ -88,11 +88,12 @@ pub const Tag = union(enum) {
     };
 
     pub const Case = struct {
+        actual: ExprRef,
         prongs: []const Prong,
         fallback: []const NodeRef,
 
         pub const Prong = struct {
-            expected_values: []const Value,
+            expected: []const ExprRef,
             body: NodeRef,
         };
     };
