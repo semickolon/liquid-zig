@@ -141,6 +141,9 @@ const TagName = enum {
     assign,
     @"break",
     @"continue",
+    case,
+    when,
+    endcase,
 };
 
 // Returning null here ends the block parser (e.g., on elsif, endif)
@@ -149,7 +152,7 @@ fn parseTag(self: *Parser) !?Ast.Tag {
 
     switch (tag_name) {
         // Block terminators
-        .elsif, .@"else", .endif, .endunless, .endfor, .endcapture => return null,
+        .elsif, .@"else", .endif, .endunless, .endfor, .endcapture, .when, .endcase => return null,
         else => self.advanceTwiceIgnoreTokens(),
     }
 
@@ -167,6 +170,7 @@ fn parseTag(self: *Parser) !?Ast.Tag {
             break :blk .@"continue";
         },
         .capture => try self.parseCaptureTag(),
+        .case => try self.parseCaseTag(),
         else => unreachable,
     };
 }
@@ -304,6 +308,38 @@ fn parseCaptureTag(self: *Parser) !Ast.Tag {
         .ident = ident,
         .block = block,
     } };
+}
+
+fn parseCaseTag(self: *Parser) !Ast.Tag {
+    const actual_expr = self.parseValueExpr();
+    self.consume(.end_tag);
+
+    const prongs = try std.ArrayList(Ast.Tag.Case.Prong).initCapacity(self.scratch, 4);
+    const else_bodies = try std.ArrayList(Ast.NodeRef).initCapacity(self.scratch, 2);
+
+    var tag: TagName = blk: while (true) {
+        // Discard content until next tag
+        if (self.peekTagStart()) |tag_name| {
+            self.advanceTwiceIgnoreTokens();
+            break :blk tag_name;
+        } else {
+            self.advanceIgnoreToken();
+        }
+    };
+
+    while (true) {
+        switch (tag) {
+            .when => unreachable,
+            .@"else" => unreachable,
+            .endcase => {
+                self.consume(.end_tag);
+                break;
+            },
+            else => unreachable,
+        }
+
+        tag = self.peekTagStart() orelse unreachable;
+    }
 }
 
 fn parseValueExpr(self: *Parser) !Ast.ExprRef {

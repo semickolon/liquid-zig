@@ -54,6 +54,7 @@ pub const Tag = union(enum) {
     @"break",
     @"continue",
     capture: Capture,
+    case: Case,
 
     pub const Conditional = struct {
         branches: []const Branch,
@@ -84,6 +85,16 @@ pub const Tag = union(enum) {
     pub const Capture = struct {
         ident: []const u8,
         block: NodeRef,
+    };
+
+    pub const Case = struct {
+        prongs: []const Prong,
+        fallback: []const NodeRef,
+
+        pub const Prong = struct {
+            expected_values: []const Value,
+            body: NodeRef,
+        };
     };
 };
 
